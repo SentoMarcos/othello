@@ -72,7 +72,7 @@ public class BoardManager : MonoBehaviour
 
     /*
      * Entrada: Dado un tablero, una posición de ficha y un turno (negras o blancas)
-     * Salida: Listado de posiciones del oponente que cambiarían de color  
+     * Salida: Listado de casillas donde te puedes mover  
      */
     public List<int> FindSelectableTiles(Tile[] board, int turn)
     {
