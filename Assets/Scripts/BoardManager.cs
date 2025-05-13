@@ -17,7 +17,11 @@ public class BoardManager : MonoBehaviour
         Tile[] copy = new Tile[board.Length];
 
         for (int i = 0; i < board.Length; i++)
-            copy[i] = board[i];
+            //copy[i] = board[i];
+            {
+                copy[i] = new Tile();
+                copy[i].value = board[i].value;
+            }
 
         return copy;        
     }
