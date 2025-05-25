@@ -12,9 +12,10 @@ public class Node
     public double alfa;
     public double beta;
     
-    // Añadimos campos para tracking
+    // Campos adicionales para tracking
     public int movePosition; // Posición del movimiento que llevó a este nodo
     public int depth; // Profundidad del nodo en el árbol
+    public bool isPruned; // Indica si este nodo fue podado
 
     public Node(Tile[] tiles)
     {
@@ -25,6 +26,11 @@ public class Node
         }
         this.movePosition = -1; // -1 indica nodo raíz
         this.depth = 0;
+        this.isPruned = false;
+        
+        // Inicialización de alfa y beta
+        this.alfa = double.MinValue;
+        this.beta = double.MaxValue;
     }    
 }
 
@@ -36,6 +42,10 @@ public class Player : MonoBehaviour
     // Configuración del MINIMAX
     private int maxDepth = 4; // Profundidad máxima del árbol
     private int originalTurn; // Para restaurar el valor original
+    
+    // Estadísticas de poda
+    private int totalNodes = 0;
+    private int prunedNodes = 0;
 
     void Start()
     {
@@ -51,21 +61,22 @@ public class Player : MonoBehaviour
         // Guardamos el valor original del turn
         originalTurn = turn;
         
-        Debug.Log("=== INICIANDO MINIMAX ===");
-        Debug.Log("Turno actual: " + turn);
+        // Reiniciamos estadísticas
+        totalNodes = 0;
+        prunedNodes = 0;
+        
+        Debug.Log("=== INICIANDO MINIMAX CON PODA ALFA-BETA ===");
+        Debug.Log("Turno actual: " + turn + ", Profundidad máxima: " + maxDepth);
         
         // Generamos el nodo raíz del árbol (MAX - nuestro turno)
         Node root = new Node(board);
         root.type = Constants.MAX;
         root.depth = 0;
+        root.alfa = double.MinValue;
+        root.beta = double.MaxValue;
         
-        // Generamos el árbol completo hasta la profundidad máxima
-        GenerateTree(root, turn, 0, maxDepth);
-        
-        Debug.Log("Árbol generado. Nodos en nivel 1: " + root.childList.Count);
-        
-        // Aplicamos MINIMAX para calcular utilidades
-        CalculateMinimax(root);
+        // Aplicamos MINIMAX con poda alfa-beta
+        double bestUtility = MinimaxAlphaBeta(root, turn, 0, double.MinValue, double.MaxValue);
         
         // Seleccionamos el mejor movimiento
         int bestMove = SelectBestMove(root);
@@ -73,23 +84,29 @@ public class Player : MonoBehaviour
         // Restauramos el valor original del turn
         turn = originalTurn;
         
-        Debug.Log("Mejor movimiento seleccionado: " + bestMove);
+        Debug.Log("=== RESULTADOS MINIMAX ===");
+        Debug.Log("Mejor utilidad: " + bestUtility);
+        Debug.Log("Mejor movimiento: " + bestMove);
+        Debug.Log("Nodos totales generados: " + totalNodes);
+        Debug.Log("Nodos podados: " + prunedNodes);
+        Debug.Log("Eficiencia de poda: " + (prunedNodes * 100.0 / totalNodes).ToString("F1") + "%");
         Debug.Log("=== FIN MINIMAX ===");
         
         return bestMove;
     }
     
     /*
-     * Genera el árbol MINIMAX recursivamente
+     * Algoritmo MINIMAX con poda alfa-beta
      */
-    private void GenerateTree(Node currentNode, int currentTurn, int currentDepth, int maxDepth)
+    private double MinimaxAlphaBeta(Node currentNode, int currentTurn, int currentDepth, double alpha, double beta)
     {
+        totalNodes++;
+        
         // Caso base: hemos llegado a la profundidad máxima
         if (currentDepth >= maxDepth)
         {
-            // Este es un nodo terminal, calculamos su utilidad
             currentNode.utility = CalculateUtility(currentNode.board);
-            return;
+            return currentNode.utility;
         }
         
         // Obtenemos las casillas donde puede mover el jugador actual
@@ -98,117 +115,170 @@ public class Player : MonoBehaviour
         // Si no hay movimientos posibles, el jugador pasa turno
         if (selectableTiles.Count == 0)
         {
-            Debug.Log("No hay movimientos disponibles en profundidad " + currentDepth + 
-                     " para jugador " + currentTurn + ". Pasando turno.");
-            
-            // Creamos un nodo hijo con el mismo tablero pero cambiando de jugador
+            // Creamos un nodo "pass" y continuamos con el oponente
             Node passNode = new Node(currentNode.board);
             passNode.parent = currentNode;
             passNode.depth = currentDepth + 1;
             passNode.movePosition = -2; // -2 indica "pasar turno"
-            
-            // El tipo del nodo hijo es el opuesto al padre
             passNode.type = (currentNode.type == Constants.MAX) ? Constants.MIN : Constants.MAX;
             
             currentNode.childList.Add(passNode);
             
-            // Continuamos generando el árbol con el turno opuesto
-            GenerateTree(passNode, -currentTurn, currentDepth + 1, maxDepth);
-            return;
+            // Recursión con turno opuesto
+            return MinimaxAlphaBeta(passNode, -currentTurn, currentDepth + 1, alpha, beta);
         }
         
-        // Generamos un nodo hijo para cada movimiento posible
-        foreach (int tilePosition in selectableTiles)
+        // Variables para el algoritmo
+        double bestValue;
+        
+        if (currentNode.type == Constants.MAX)
         {
-            // Creamos un nuevo nodo hijo copiando el tablero del padre
-            Node childNode = new Node(currentNode.board);
+            // Nodo MAX: buscamos maximizar
+            bestValue = double.MinValue;
             
-            // Configuramos las propiedades del nodo hijo
-            childNode.parent = currentNode;
-            childNode.depth = currentDepth + 1;
-            childNode.movePosition = tilePosition;
+            foreach (int tilePosition in selectableTiles)
+            {
+                // Creamos nodo hijo
+                Node childNode = CreateChildNode(currentNode, tilePosition, currentTurn, currentDepth);
+                
+                // Llamada recursiva
+                double childValue = MinimaxAlphaBeta(childNode, -currentTurn, currentDepth + 1, alpha, beta);
+                
+                // Actualizamos el mejor valor
+                bestValue = System.Math.Max(bestValue, childValue);
+                alpha = System.Math.Max(alpha, bestValue);
+                
+                // PODA ALFA-BETA: Si β ≤ α, podamos
+                if (beta <= alpha)
+                {
+                    prunedNodes++;
+                    childNode.isPruned = true;
+                    Debug.Log("PODA en MAX - Profundidad " + currentDepth + 
+                             " (α=" + alpha.ToString("F1") + ", β=" + beta.ToString("F1") + ")");
+                    break; // Poda: no exploramos más hermanos
+                }
+            }
+        }
+        else
+        {
+            // Nodo MIN: buscamos minimizar
+            bestValue = double.MaxValue;
             
-            // El tipo del nodo hijo es el opuesto al padre
-            childNode.type = (currentNode.type == Constants.MAX) ? Constants.MIN : Constants.MAX;
-            
-            // Aplicamos el movimiento al tablero del nodo hijo
-            boardManager.Move(childNode.board, tilePosition, currentTurn);
-            
-            // Añadimos el nodo hijo a la lista del padre
-            currentNode.childList.Add(childNode);
-            
-            // Continuamos generando el árbol recursivamente con el turno opuesto
-            GenerateTree(childNode, -currentTurn, currentDepth + 1, maxDepth);
+            foreach (int tilePosition in selectableTiles)
+            {
+                // Creamos nodo hijo
+                Node childNode = CreateChildNode(currentNode, tilePosition, currentTurn, currentDepth);
+                
+                // Llamada recursiva
+                double childValue = MinimaxAlphaBeta(childNode, -currentTurn, currentDepth + 1, alpha, beta);
+                
+                // Actualizamos el mejor valor
+                bestValue = System.Math.Min(bestValue, childValue);
+                beta = System.Math.Min(beta, bestValue);
+                
+                // PODA ALFA-BETA: Si β ≤ α, podamos
+                if (beta <= alpha)
+                {
+                    prunedNodes++;
+                    childNode.isPruned = true;
+                    Debug.Log("PODA en MIN - Profundidad " + currentDepth + 
+                             " (α=" + alpha.ToString("F1") + ", β=" + beta.ToString("F1") + ")");
+                    break; // Poda: no exploramos más hermanos
+                }
+            }
         }
         
-        Debug.Log("Profundidad " + currentDepth + ": generados " + 
-                 currentNode.childList.Count + " nodos hijos");
+        // Guardamos los valores alfa y beta en el nodo
+        currentNode.alfa = alpha;
+        currentNode.beta = beta;
+        currentNode.utility = bestValue;
+        
+        return bestValue;
     }
     
     /*
-     * Calcula la utilidad de un tablero dado
-     * Por ahora implementamos una función simple: diferencia de fichas
+     * Crea un nodo hijo aplicando un movimiento
+     */
+    private Node CreateChildNode(Node parent, int tilePosition, int currentTurn, int currentDepth)
+    {
+        // Creamos un nuevo nodo hijo copiando el tablero del padre
+        Node childNode = new Node(parent.board);
+        
+        // Configuramos las propiedades del nodo hijo
+        childNode.parent = parent;
+        childNode.depth = currentDepth + 1;
+        childNode.movePosition = tilePosition;
+        childNode.type = (parent.type == Constants.MAX) ? Constants.MIN : Constants.MAX;
+        
+        // Aplicamos el movimiento al tablero del nodo hijo
+        boardManager.Move(childNode.board, tilePosition, currentTurn);
+        
+        // Añadimos el nodo hijo a la lista del padre
+        parent.childList.Add(childNode);
+        
+        return childNode;
+    }
+    
+    /*
+     * Función de utilidad mejorada
      */
     private double CalculateUtility(Tile[] board)
     {
         int myPieces = boardManager.CountPieces(board, originalTurn);
         int opponentPieces = boardManager.CountPieces(board, -originalTurn);
         
-        // Función de utilidad simple: diferencia de fichas
-        double utility = myPieces - opponentPieces;
+        // Componente 1: Diferencia de fichas (peso base)
+        double pieceDifference = myPieces - opponentPieces;
         
-        // Bonificación por victoria completa
-        if (opponentPieces == 0) utility += 1000;
-        if (myPieces == 0) utility -= 1000;
+        // Componente 2: Bonificación por esquinas (muy importantes)
+        double cornerBonus = 0;
+        int[] corners = {0, 7, 56, 63}; // Esquinas del tablero 8x8
+        foreach (int corner in corners)
+        {
+            if (board[corner].value == originalTurn) cornerBonus += 25;
+            else if (board[corner].value == -originalTurn) cornerBonus -= 25;
+        }
         
-        return utility;
+        // Componente 3: Bonificación por bordes
+        double edgeBonus = 0;
+        for (int i = 0; i < 64; i++)
+        {
+            if (IsEdgePosition(i))
+            {
+                if (board[i].value == originalTurn) edgeBonus += 5;
+                else if (board[i].value == -originalTurn) edgeBonus -= 5;
+            }
+        }
+        
+        // Componente 4: Movilidad (número de movimientos disponibles)
+        int myMobility = boardManager.FindSelectableTiles(board, originalTurn).Count;
+        int opponentMobility = boardManager.FindSelectableTiles(board, -originalTurn).Count;
+        double mobilityBonus = (myMobility - opponentMobility) * 2;
+        
+        // Componente 5: Casos especiales (victoria/derrota)
+        double gameEndBonus = 0;
+        if (opponentPieces == 0) gameEndBonus = 1000; // Victoria total
+        else if (myPieces == 0) gameEndBonus = -1000; // Derrota total
+        else if (myPieces + opponentPieces == 64) // Tablero lleno
+        {
+            if (myPieces > opponentPieces) gameEndBonus = 500; // Victoria por mayoría
+            else if (myPieces < opponentPieces) gameEndBonus = -500; // Derrota por mayoría
+        }
+        
+        // Utilidad total combinada
+        double totalUtility = pieceDifference + cornerBonus + edgeBonus + mobilityBonus + gameEndBonus;
+        
+        return totalUtility;
     }
     
     /*
-     * Aplica el algoritmo MINIMAX para calcular las utilidades
+     * Determina si una posición está en el borde del tablero
      */
-    private double CalculateMinimax(Node node)
+    private bool IsEdgePosition(int position)
     {
-        // Si es un nodo terminal (hoja), ya tiene calculada su utilidad
-        if (node.childList.Count == 0)
-        {
-            return node.utility;
-        }
-        
-        // Si es un nodo MAX, tomamos el valor máximo de los hijos
-        if (node.type == Constants.MAX)
-        {
-            double maxValue = double.MinValue;
-            
-            foreach (Node child in node.childList)
-            {
-                double childValue = CalculateMinimax(child);
-                if (childValue > maxValue)
-                {
-                    maxValue = childValue;
-                }
-            }
-            
-            node.utility = maxValue;
-            return maxValue;
-        }
-        // Si es un nodo MIN, tomamos el valor mínimo de los hijos
-        else
-        {
-            double minValue = double.MaxValue;
-            
-            foreach (Node child in node.childList)
-            {
-                double childValue = CalculateMinimax(child);
-                if (childValue < minValue)
-                {
-                    minValue = childValue;
-                }
-            }
-            
-            node.utility = minValue;
-            return minValue;
-        }
+        int row = position / 8;
+        int col = position % 8;
+        return (row == 0 || row == 7 || col == 0 || col == 7);
     }
     
     /*
@@ -222,48 +292,64 @@ public class Player : MonoBehaviour
             return -1;
         }
         
-        Node bestChild = root.childList[0];
-        double bestUtility = root.childList[0].utility;
+        Node bestChild = null;
+        double bestUtility = double.MinValue;
         
         // Buscamos el hijo con la mejor utilidad
-        for (int i = 1; i < root.childList.Count; i++)
+        foreach (Node child in root.childList)
         {
-            Node child = root.childList[i];
-            if (child.utility > bestUtility)
+            if (child.utility > bestUtility && !child.isPruned)
             {
                 bestUtility = child.utility;
                 bestChild = child;
             }
         }
         
-        Debug.Log("Mejor utilidad encontrada: " + bestUtility);
-        Debug.Log("Movimiento corresponde a posición: " + bestChild.movePosition);
+        // Si no encontramos ningún hijo válido, tomamos el primero
+        if (bestChild == null)
+        {
+            bestChild = root.childList[0];
+            bestUtility = bestChild.utility;
+        }
         
-        // Si el mejor movimiento es "pasar turno", necesitamos manejar este caso
+        Debug.Log("Mejor hijo encontrado - Utilidad: " + bestUtility + 
+                 ", Movimiento: " + bestChild.movePosition + 
+                 ", Podado: " + bestChild.isPruned);
+        
+        // Si el mejor movimiento es "pasar turno", manejamos este caso
         if (bestChild.movePosition == -2)
         {
-            Debug.LogWarning("El mejor movimiento es pasar turno - esto no debería ocurrir");
-            return -1;
+            Debug.LogWarning("El mejor movimiento es pasar turno - buscando alternativa");
+            // En este caso, deberíamos buscar el primer movimiento válido
+            List<int> validMoves = boardManager.FindSelectableTiles(root.board, originalTurn);
+            if (validMoves.Count > 0)
+            {
+                return validMoves[0];
+            }
         }
         
         return bestChild.movePosition;
     }
     
     /*
-     * Función auxiliar para debug: imprime información del árbol
+     * Función auxiliar para debug: imprime información del árbol con poda
      */
-    private void PrintTreeInfo(Node node, int level = 0)
+    private void PrintTreeInfoWithPruning(Node node, int level = 0)
     {
         string indent = new string(' ', level * 2);
-        Debug.Log(indent + "Nivel " + level + " - Tipo: " + 
-                 (node.type == Constants.MAX ? "MAX" : "MIN") + 
-                 " - Utilidad: " + node.utility + 
+        string prunedText = node.isPruned ? " [PODADO]" : "";
+        
+        Debug.Log(indent + "Nivel " + level + 
+                 " - Tipo: " + (node.type == Constants.MAX ? "MAX" : "MIN") + 
+                 " - Utilidad: " + node.utility.ToString("F1") + 
+                 " - α: " + node.alfa.ToString("F1") + 
+                 " - β: " + node.beta.ToString("F1") + 
                  " - Movimiento: " + node.movePosition + 
-                 " - Hijos: " + node.childList.Count);
+                 " - Hijos: " + node.childList.Count + prunedText);
         
         foreach (Node child in node.childList)
         {
-            PrintTreeInfo(child, level + 1);
+            PrintTreeInfoWithPruning(child, level + 1);
         }
     }
 }
